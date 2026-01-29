@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from __future__ import annotations
+
 from fastapi import Depends, FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import Field
@@ -20,11 +22,18 @@ app = FastAPI(
     openapi_tags=openapi_tags,
 )
 
-# Allow React dev server by default (port 3000).
-# If you deploy, you can extend this via an env var in the future.
+# CORS:
+# - Local dev: CRA runs on http://localhost:3000
+# - Kavia preview: frontend is served from a https://...:3000 origin
+# Since the backend URL is configurable in the frontend, we allow a small,
+# explicit list of known dev origins to avoid CORS issues end-to-end.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        # Kavia preview origin for the running frontend container (port 3000)
+        "https://vscode-internal-21100-beta.beta01.cloud.kavia.ai:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
