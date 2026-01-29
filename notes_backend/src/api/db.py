@@ -1,0 +1,99 @@
+"""
+SQLite persistence utilities for the Notes API.
+
+This module provides a small, dependency-injected database connection factory,
+and ensures that the required schema exists.
+
+The database container exposes SQLITE_DB (path to sqlite file). We use that env var
+to connect to the same database file so both containers share persistence.
+"""
+
+from __future__ import annotations
+
+import os
+import sqlite3
+from contextlib import contextmanager
+from typing import Generator
+
+
+def _default_db_path() -> str:
+    """
+    Resolve the SQLite file path.
+
+    Priority:
+    1) SQLITE_DB env var (provided by the database container runtime)
+    2) Fallback to the known database container path in this workspace (dev convenience)
+    3) Local file 'myapp.db' in backend container directory (last resort)
+    """
+    env_path = os.getenv("SQLITE_DB")
+    if env_path:
+        return env_path
+
+    # Fallback path based on the database container layout in this mono-workspace.
+    workspace_fallback = (
+        "/home/kavia/workspace/code-generation/"
+        "simple-notes-app-312494-312507/database/myapp.db"
+    )
+    if os.path.exists(workspace_fallback):
+        return workspace_fallback
+
+    return os.path.abspath("myapp.db")
+
+
+def init_db(conn: sqlite3.Connection) -> None:
+    """Ensure the notes table (and supporting trigger) exist."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+
+    # Keep updated_at current whenever a row is updated.
+    # SQLite doesn't support ON UPDATE for columns; use trigger.
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS notes_set_updated_at
+        AFTER UPDATE ON notes
+        FOR EACH ROW
+        BEGIN
+            UPDATE notes
+            SET updated_at = datetime('now')
+            WHERE id = OLD.id;
+        END;
+        """
+    )
+
+    conn.commit()
+
+
+@contextmanager
+def _connect(db_path: str) -> Generator[sqlite3.Connection, None, None]:
+    """Context manager for sqlite3 connection with row factory set."""
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        yield conn
+    finally:
+        conn.close()
+
+
+# PUBLIC_INTERFACE
+def get_db() -> Generator[sqlite3.Connection, None, None]:
+    """
+    FastAPI dependency that yields a sqlite3 connection to the shared database file.
+
+    Yields:
+        sqlite3.Connection: Open connection (closed automatically after request).
+    """
+    db_path = _default_db_path()
+    with _connect(db_path) as conn:
+        # Ensure schema exists for this app.
+        init_db(conn)
+        yield conn
